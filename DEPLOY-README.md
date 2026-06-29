@@ -1,6 +1,6 @@
 # Aurora Console — dev-newhs Deployment Guide
 
-This guide documents every step required to bring up the dev-newhs environment on a new cluster, from infrastructure prerequisites (Traefik, Tailscale) through GitOps bootstrap (ArgoCD), and must be completed before moving on to aurora-console/dev-newhs/DEPLOY.md, which assumes all of these components are already running.
+This guide documents every step required to bring up the dev-newhs environment on a new cluster, from infrastructure prerequisites (Traefik, Tailscale) through GitOps bootstrap (ArgoCD), and must be completed before moving on to `aurora-console/dev-newhs/DEPLOY.md`, which assumes all of these components are already running.
 
 Each phase includes the reasoning behind it, the exact commands to run, and the expected output so you can verify success before proceeding to the next step.
 

@@ -1,6 +1,7 @@
 # Aurora Console — dev-newhs Deployment Guide
 
-add a description..
+This guide documents every step required to bring up the dev-newhs environment on a new cluster, from infrastructure prerequisites (Traefik, Tailscale) through GitOps bootstrap (ArgoCD), and must be completed before moving on to aurora-console/dev-newhs/DEPLOY.md, which assumes all of these components are already running.
+Each phase includes the reasoning behind it, the exact commands to run, and the expected output so you can verify success before proceeding to the next step.
 
 ---
 
@@ -35,6 +36,7 @@ Traefik LoadBalancer  ←  tailnet IP: 100.100.237.56
         ├── portal-newhs.auroraiq.cloud          →  portal-ui:443    (React frontend)
         └── auth-newhs.auroraiq.cloud            →  keycloak:8443    (Login / JWT)
 ```
+> 100.100.237.56 is an example!
 
 ### Key components and their roles
 
@@ -55,7 +57,7 @@ Traefik LoadBalancer  ←  tailnet IP: 100.100.237.56
 
 ## 2. Phase 1 — Sealed Secrets
 
-> **Why:** Kubernetes Secrets (passwords, tokens, credentials) cannot be stored in plain text in git. Sealed Secrets encrypts them using the cluster's own certificate — only that specific cluster can decrypt them. This means your git repo is safe to be public or shared.
+> **Why:** Kubernetes Secrets (passwords, tokens, credentials) cannot be stored in plain text in git. Sealed Secrets encrypts them using the cluster's own certificate, only that specific cluster can decrypt them. This means your git repo is safe to be public or shared.
 
 Script coming soon..
 
@@ -234,28 +236,29 @@ argocd-server-79fd69df95-ksr4s                      1/1     Running   0         
 
 ## 6. Isolation Strategy — Why test-managed-services
 
-> **Read this before touching any files.** This explains the folder and branch structure you will be working in for all remaining phases.
+> **Read this before touching any files.** This explains the folder and branch structure you will be working in for all remaining phases. It explains why we create a separate deployment folder instead of modifying existing `dev-newhs` resources.
+
 
 ### The problem
+`portal-api/deployment.yaml` currently contains the old IP: 100.99.0.11
+This needs to be updated to the new IP, and `portal-api/configmap.yaml` also requires changes (see Phase 5).
 
-`aurora-console/dev-newhs/` and `argocd/bootstrap/dev-newhs.yaml` already exist on `main` and are actively used by the organization's existing `dev-newhs` environment.
+However, these files are part of the existing `aurora-console/dev-newhs` environment and are already used by other workloads. Modifying them directly could affect existing ArgoCD deployments.
 
-If you modify those files on the `deploy/dev-newhs` branch, you create a **merge conflict** when merging back to `main` later — git sees two different versions of the same file and cannot resolve it automatically. Resolving it manually risks breaking the org's live environment.
+A possible approach would be to create a `deploy/dev-newhs` branch, modify the existing `aurora-console/dev-newhs` files, and point ArgoCD to that branch.
 
-There is also a second risk: the org's ArgoCD instances watch `main`. If they ever read the `deploy/dev-newhs` branch, they could pick up your changes and deploy them to the wrong cluster.
+However, this would create a **merge conflict** when merging back to `main` later.
 
-### The solution — a completely new folder
+### The solution — a completely isolated environment
 
-Instead of touching any existing files, all work for this deployment lives in brand new files that nobody else is using:
+Instead of modifying existing resources, we create a new environment with dedicated files:
 
 ```
-aurora-console/test-managed-services/                         ← your working copy of the manifests
+aurora-console/test-managed-services/                         ← isolated copy of manifests
 argocd/bootstrap/test-managed-services.yaml                   ← your ArgoCD root app
 argocd/projects/aurora-console-test-managed-services.yaml     ← your AppProject
 argocd/apps/test-managed-services/aurora-console.yaml         ← your Application
 ```
-
-The original org files are **restored to their main state** on the branch — so merging `deploy/dev-newhs` → `main` later produces **zero conflicts**.
 
 ### Branch and folder ownership
 
@@ -288,23 +291,21 @@ sed -i 's/dev-newhs/test-managed-services/g' argocd/bootstrap/test-managed-servi
 sed -i 's/dev-newhs/test-managed-services/g' argocd/projects/aurora-console-test-managed-services.yaml
 sed -i 's/dev-newhs/test-managed-services/g' argocd/apps/test-managed-services/aurora-console.yaml
 
-# 5. Point the app and bootstrap to the deploy/dev-newhs branch (not main)
+# 5. Update IP in test-managed-services/portal-api/deployment.yaml
+sed -i 's|100.99.0.11|100.100.237.56|' aurora-console/test-managed-services/portal-api/deployment.yaml
+
+# 6. Point the app and bootstrap to the deploy/dev-newhs branch (not main)
 sed -i 's/targetRevision: main/targetRevision: deploy\/dev-newhs/' \
   argocd/apps/test-managed-services/aurora-console.yaml
 
-# 6. Fix the branch name in the bootstrap (sed above set it to deploy/test-managed-services — wrong)
-sed -i 's/targetRevision: deploy\/test-managed-services/targetRevision: deploy\/dev-newhs/' \
+sed -i 's/targetRevision: main/targetRevision: deploy\/dev-newhs/' \
   argocd/bootstrap/test-managed-services.yaml
 
-# 7. Exclude the org's dev-newhs apps from our ArgoCD so it doesn't try to apply them
+# 7. Exclude the org's dev-newhs apps from your ArgoCD so it doesn't try to apply them
 sed -i "s/exclude: '{bootstrap\/*,apps\/dev\/*,apps\/prod\/*}'/exclude: '{bootstrap\/*,apps\/dev\/*,apps\/prod\/*,apps\/dev-newhs\/*}'/" \
   argocd/bootstrap/test-managed-services.yaml
 
-# 8. Restore the org's original files so they produce no diff on merge
-git restore --staged aurora-console/dev-newhs/
-git restore --staged argocd/bootstrap/dev-newhs.yaml
-
-# 9. Push
+# 8. Push
 git push origin deploy/dev-newhs
 ```
 
@@ -329,6 +330,8 @@ ArgoCD deploys:
 
 After this, **every `git push` to `deploy/dev-newhs` is a deployment**. No more `kubectl apply` needed.
 
+**Note:** After merging into `main`, you can safely change `targetRevision` back to `main`.
+
 ---
 
 ## 7. Phase 5 — Fix portal-api ConfigMap
@@ -346,7 +349,7 @@ cat aurora-console/test-managed-services/portal-api/configmap.yaml
 lxc storage list                              # confirms storage pool name
 lxc network list                              # confirms UPLINK exists
 lxc project list                              # confirms auroraiq-portal exists
-lxc network list --project auroraiq-portal   # confirms portal-net exists
+lxc network list --project auroraiq-portal    # confirms portal-net exists
 ```
 
 > The only mismatch found was `LXD_STORAGE_POOL: "disks"` — the real pool is named `local`.

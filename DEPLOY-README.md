@@ -1,6 +1,7 @@
 # Aurora Console — dev-newhs Deployment Guide
 
 This guide documents every step required to bring up the dev-newhs environment on a new cluster, from infrastructure prerequisites (Traefik, Tailscale) through GitOps bootstrap (ArgoCD), and must be completed before moving on to aurora-console/dev-newhs/DEPLOY.md, which assumes all of these components are already running.
+
 Each phase includes the reasoning behind it, the exact commands to run, and the expected output so you can verify success before proceeding to the next step.
 
 ---
@@ -325,7 +326,7 @@ ArgoCD creates:
         │  child app scans aurora-console/test-managed-services/
         ▼
 ArgoCD deploys:
-  portal-api, portal-ui, keycloak, ingress, sealed secrets...
+  portal-api, portal-ui, keycloak, ingress...
 ```
 
 After this, **every `git push` to `deploy/dev-newhs` is a deployment**. No more `kubectl apply` needed.
@@ -420,10 +421,10 @@ portal-db-postgresql-0   1/1   Running   0   66s
 ```
 
 ---
+ 
+## 9. Phase 7 — ArgoCD Bootstrap (To be continued..)
 
-## 9. Phase 7 — ArgoCD Bootstrap
-
-> **Why:** This is the step that puts the cluster under full GitOps control. You apply one file manually — the root Application — and ArgoCD takes it from there: it finds the AppProject and child Application in git, creates them, then syncs all the portal manifests (portal-api, portal-ui, keycloak, ingress, sealed secrets) automatically.
+> **Why:** This is the step that puts the cluster under full GitOps control. You apply one file manually — the root Application — and ArgoCD takes it from there: it finds the AppProject and child Application in git, creates them, then syncs all the portal manifests (portal-api, portal-ui, keycloak, ingress..) automatically.
 
 ### Pre-Bootstrap Checklist
 
@@ -451,9 +452,6 @@ All five must show `Running`. Do not proceed if any are missing or in error stat
 ### Bootstrap
 
 ```bash
-# Apply the ArgoCD repo credentials (so ArgoCD can clone the private repo)
-kubectl apply -f aurora-console/test-managed-services/sealed-secrets/argocd/argocd-repo-credentials.yaml
-
 # Apply the root Application — the only manual kubectl apply for this environment
 kubectl apply -f argocd/bootstrap/test-managed-services.yaml
 ```
@@ -467,9 +465,8 @@ kubectl get applications -n argocd
 ```
 NAME                                   SYNC STATUS   HEALTH STATUS
 root-app-test-managed-services         Synced        Healthy
-aurora-console-test-managed-services   Synced        Degraded
+aurora-console-test-managed-services   Synced        Healthy
 ```
 
-> The root app being `Synced + Healthy` means ArgoCD successfully read the git repo and created the AppProject and child Application. The child app showing `Degraded` is normal at this point — it means ArgoCD synced the manifests but some pods are not yet healthy.
+> The root app being `Synced + Healthy` means ArgoCD successfully read the git repo and created the AppProject and child Application. 
 
-```

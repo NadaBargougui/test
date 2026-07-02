@@ -1,10 +1,5 @@
 # Aurora Console — dev-newhs Deployment Guide
 
-This guide documents every step required to bring up the dev-newhs environment on a new cluster, from infrastructure prerequisites (Traefik, Tailscale) through GitOps bootstrap (ArgoCD).
-
-Each phase includes the reasoning behind it, the exact commands to run, and the expected output so you can verify success before proceeding to the next step.
-
-
 > ## ⚠️ Before you start — values specific to this environment
 >
 > This guide was written while setting up **one particular** environment. Several names and one IP address below are **not generic placeholders** — they're the actual values chosen for that setup. If you're following these steps for your own environment, **replace them with your own names**, and keep them consistent everywhere they appear (branch, folders, and file names must all match each other).
@@ -18,8 +13,14 @@ Each phase includes the reasoning behind it, the exact commands to run, and the 
 > | `argocd/apps/test-managed-services/aurora-console.yaml` | ArgoCD Application file | matching your folder name above |
 > | `100.100.237.56` | Tailscale IP assigned to Traefik | **this will be different for every setup** — get it from `kubectl get svc -n traefik traefik` after Phase 3 |
 > | `admin` (Keycloak portal user in Phase 8) | First portal admin username | your own choice — **change it if you want a different username** |
+| `admin@auroraiq.cloud` (Phase 8 user email) | Email attached to that portal admin user | your own address |
+| `admin@auroraiq.cloud` (Phase 9, Brevo section) | Verified SMTP "from" sender mailbox | a real mailbox you control on your domain — this one is unrelated to the Phase 8 admin user |
 >
 > Everywhere `test-managed-services` appears (folder names, file names, ArgoCD app/project names), it must be the **same string** you chose — that's what ties the branch, the folders, and the ArgoCD objects together. Mixing different names between steps will break the bootstrap.
+
+This guide documents every step required to bring up the dev-newhs environment on a new cluster, from infrastructure prerequisites (Traefik, Tailscale) through GitOps bootstrap (ArgoCD).
+
+Each phase includes the reasoning behind it, the exact commands to run, and the expected output so you can verify success before proceeding to the next step.
 
 ---
 
@@ -546,7 +547,7 @@ The portal's admin pages (the *backoffice*) are gated on the Keycloak **`admin` 
 
 4. **Fill the Create user form:**
    - **Username**: `admin` (or your choice — this is what you'll type at login)
-   - **Email**: `raslen.missaoui@auroraiq.cloud`
+   - **Email**: `admin@auroraiq.cloud`
    - **Email verified**: toggle **On** (skip the verify-mail step)
    - **First name / Last name**: optional, fill if you want it shown in the portal
    - Leave **Required user actions** empty (otherwise the user is forced to UPDATE_PASSWORD / VERIFY_EMAIL on first login)
@@ -579,7 +580,7 @@ kubectl exec -n dev $KC -- /opt/keycloak/bin/kcadm.sh config credentials \
 
 # Create the user in the auroraiq realm
 kubectl exec -n dev $KC -- /opt/keycloak/bin/kcadm.sh create users -r auroraiq \
-  -s username='admin' -s email='raslen.missaoui@auroraiq.cloud' \
+  -s username='admin' -s email='admin@auroraiq.cloud' \
   -s enabled=true -s emailVerified=true
 
 # Set a permanent password (no UPDATE_PASSWORD required action)
@@ -634,7 +635,7 @@ Direct page: **https://app.brevo.com/senders/list**
 1. Click **Ajouter un expéditeur** (top-right).
 2. Fill:
    - **From Name**: `AuroraIQ`
-   - **From Email**: `raslen.missaoui@auroraiq.cloud` (or any real mailbox you can open on the `auroraiq.cloud` domain).
+   - **From Email**: `admin@auroraiq.cloud` (or any real mailbox you can open on the `auroraiq.cloud` domain).
 3. When the popup *"Authentifier votre domaine maintenant ?"* shows → click **Reporter à plus tard**. (Single-sender is enough for dev; full domain auth = clean path for prod.)
 4. Open the verification mail Brevo just sent to that address, click the confirm link.
 5. Back on the senders page, the row must show a green **Vérifié** badge.
@@ -658,7 +659,7 @@ TOKEN=$(curl -s -X POST "$KC_HOST/realms/master/protocol/openid-connect/token" \
 # Brevo creds from 10.2 + verified sender from 10.3
 BREVO_USER='<id>@smtp-brevo.com'
 BREVO_PASS='xsmtpsib-<full-api-key-from-brevo>'
-BREVO_FROM='raslen.missaoui@auroraiq.cloud'
+BREVO_FROM='admin@auroraiq.cloud'
 BREVO_NAME='AuroraIQ'
 
 # PUT the smtpServer block on the auroraiq realm
@@ -717,4 +718,4 @@ If you get `204` but no mail lands within 2 min:
 
 ### 10.6 Validate the signup flow
 
-Fresh private window → portal signup → check inbox for the **Verify Email** from `AuroraIQ <raslen.missaoui@auroraiq.cloud>`. Click the link → user lands as verified.
+Fresh private window → portal signup → check inbox for the **Verify Email** from `AuroraIQ <admin@auroraiq.cloud>`. Click the link → user lands as verified.

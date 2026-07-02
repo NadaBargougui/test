@@ -1,26 +1,26 @@
 # Aurora Console — dev-newhs Deployment Guide
 
-> ## ⚠️ Before you start — values specific to this environment
+This guide documents every step required to bring up the dev-newhs environment on a new cluster, from infrastructure prerequisites (Traefik, Tailscale) through GitOps bootstrap (ArgoCD).
+
+Each phase includes the reasoning behind it, the exact commands to run, and the expected output so you can verify success before proceeding to the next step.
+
+> ## Before you start — values specific to this environment
 >
 > This guide was written while setting up **one particular** environment. Several names and one IP address below are **not generic placeholders** — they're the actual values chosen for that setup. If you're following these steps for your own environment, **replace them with your own names**, and keep them consistent everywhere they appear (branch, folders, and file names must all match each other).
 >
 > | Value used in this guide | What it is | Replace with |
 > |---|---|---|
-> | `deploy/dev-newhs` | Git branch name | your own branch name |
-> | `aurora-console/test-managed-services/` | Isolated manifests folder | your own environment folder name |
-> | `argocd/bootstrap/test-managed-services.yaml` | ArgoCD root app file | matching your folder name above |
-> | `argocd/projects/aurora-console-test-managed-services.yaml` | AppProject file | matching your folder name above |
-> | `argocd/apps/test-managed-services/aurora-console.yaml` | ArgoCD Application file | matching your folder name above |
-> | `100.100.237.56` | Tailscale IP assigned to Traefik | **this will be different for every setup** — get it from `kubectl get svc -n traefik traefik` after Phase 3 |
-> | `admin` (Keycloak portal user in Phase 8) | First portal admin username | your own choice — **change it if you want a different username** |
-| `admin@auroraiq.cloud` (Phase 8 user email) | Email attached to that portal admin user | your own address |
-| `admin@auroraiq.cloud` (Phase 9, Brevo section) | Verified SMTP "from" sender mailbox | a real mailbox you control on your domain — this one is unrelated to the Phase 8 admin user |
+> | `deploy/dev-newhs` | Git branch name | Your own branch name |
+> | `aurora-console/test-managed-services/` | Isolated manifests folder | Your own environment folder name |
+> | `argocd/bootstrap/test-managed-services.yaml` | ArgoCD root application file | Match your environment folder name |
+> | `argocd/projects/aurora-console-test-managed-services.yaml` | ArgoCD AppProject file | Match your environment folder name |
+> | `argocd/apps/test-managed-services/aurora-console.yaml` | ArgoCD Application file | Match your environment folder name |
+> | `100.100.237.56` | Tailscale IP assigned to Traefik | **This will be different for every setup.** Get it from `kubectl get svc -n traefik traefik` after Phase 3. |
+> | `admin` (Phase 8) | Initial portal administrator username | Your own choice. Change it if you want a different username. |
+> | `admin@auroraiq.cloud` (Phase 8) | Email address for the initial portal administrator | Your own email address |
+> | `admin@auroraiq.cloud` (Phase 9, Brevo SMTP) | Verified SMTP **From** sender address | A real mailbox you control on your domain. This is **independent of the Phase 8 admin user**. |
 >
 > Everywhere `test-managed-services` appears (folder names, file names, ArgoCD app/project names), it must be the **same string** you chose — that's what ties the branch, the folders, and the ArgoCD objects together. Mixing different names between steps will break the bootstrap.
-
-This guide documents every step required to bring up the dev-newhs environment on a new cluster, from infrastructure prerequisites (Traefik, Tailscale) through GitOps bootstrap (ArgoCD).
-
-Each phase includes the reasoning behind it, the exact commands to run, and the expected output so you can verify success before proceeding to the next step.
 
 ---
 

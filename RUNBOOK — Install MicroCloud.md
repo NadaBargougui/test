@@ -165,16 +165,91 @@ sudo systemctl disable --now docker
 
 # Phase 2 — Install MicroCloud
 
+## Choose the Snap channels
+
+Before installing the components, check the available Snap channels.
+
+Canonical publishes several channels (stable, candidate, beta, edge) and multiple release tracks.
+
+For production or reproducible development environments, always install the components from an explicit stable channel instead of relying on the default channel.
+
+Display the available channels:
+
 ```bash
-sudo snap install lxd 
-sudo snap install microovn 
-sudo snap install microcloud 
+snap info lxd
+snap info microcloud
+snap info microovn
+```
+
+For this runbook, use:
+
+| Component | Channel |
+|-----------|----------|
+| LXD | `5.21/stable` |
+| MicroCloud | `2/stable` |
+| MicroOVN | `24.03/stable` |
+
+Installing from explicit channels ensures that every server uses the same feature set and avoids unexpected behavior caused by automatic migration to a newer major release.
+
+## Install the components
+
+```bash
+sudo snap install lxd --channel=5.21/stable
+sudo snap install microovn --channel=24.03/stable
+sudo snap install microcloud --channel=2/stable
+```
+
+Verify the installation:
+
+```bash
+snap list | grep -E 'lxd|microovn|microcloud'
+```
+
+Expected output (versions may differ slightly):
+
+```text
+Name        Version                 Tracking
+lxd         5.21.x                  5.21/stable
+microcloud  2.x                     2/stable
+microovn    24.03.x                 24.03/stable
+```
+
+---
+
+## Prevent automatic updates
+
+For a reproducible AuroraIQ development environment, it is recommended to disable automatic updates for these three components.
+
+This ensures that all developers and deployment servers continue using the exact validated versions until the team explicitly decides to upgrade.
+
+Hold the three snaps:
+
+```bash
+sudo snap refresh --hold lxd
+sudo snap refresh --hold microcloud
+sudo snap refresh --hold microovn
 ```
 
 Verify:
 
 ```bash
-snap list | grep -E 'lxd|microovn|microcloud'
+snap refresh --time
+```
+
+When the team decides to upgrade, simply remove the hold:
+
+```bash
+sudo snap refresh --unhold lxd
+sudo snap refresh --unhold microcloud
+sudo snap refresh --unhold microovn
+```
+
+Then refresh manually:
+
+```bash
+sudo snap refresh lxd
+sudo snap refresh microcloud
+sudo snap refresh microovn
 ```
 
 ---

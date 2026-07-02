@@ -4,8 +4,8 @@ This guide documents every step required to bring up the dev-newhs environment o
 
 Each phase includes the reasoning behind it, the exact commands to run, and the expected output so you can verify success before proceeding to the next step.
 
----
-> ## ! Before you start — values specific to this environment
+
+> ## ⚠️ Before you start — values specific to this environment
 >
 > This guide was written while setting up **one particular** environment. Several names and one IP address below are **not generic placeholders** — they're the actual values chosen for that setup. If you're following these steps for your own environment, **replace them with your own names**, and keep them consistent everywhere they appear (branch, folders, and file names must all match each other).
 >
@@ -292,7 +292,7 @@ kubectl get svc -n traefik traefik
 NAME      TYPE           CLUSTER-IP       EXTERNAL-IP                                        PORT(S)                      AGE
 traefik   LoadBalancer   10.152.183.195   100.100.237.56,traefik-newhs.tailefca39.ts.net    80:31384/TCP,443:30443/TCP   2d7h
 ```
-> 100.100.237.56 is an exapmle!
+> 100.100.237.56 is an example — yours will be a different tailnet IP, assigned automatically by the Tailscale Operator. Use whatever IP shows up in your own output.
 
 **Verify on the tailnet:**
 ```bash
@@ -533,6 +533,8 @@ The portal's admin pages (the *backoffice*) are gated on the Keycloak **`admin` 
 
 > ⚠️ Without this phase, NO ONE can access the backoffice. Even logging in as `admin` from the Keycloak master console gives you nothing on the portal — `master/admin` is the Keycloak super-user, NOT a portal user. The portal only reads tokens from the `auroraiq` realm.
 
+> **Note:** the steps below use `admin` as the example username for the first portal user (not to be confused with the Keycloak master-realm super-user mentioned above — this is a separate user created inside the `auroraiq` realm). Change it to whatever username you'd like — just keep it consistent between the "create user", "set password", and "assign role" steps.
+
 ### 9.1 — Option A: Keycloak admin console (UI, step by step)
 
 1. **Open the Keycloak admin console** → https://auth-newhs.auroraiq.cloud/admin
@@ -543,7 +545,7 @@ The portal's admin pages (the *backoffice*) are gated on the Keycloak **`admin` 
 3. **Left sidebar → `Users` → button `Add user` (top-right).**
 
 4. **Fill the Create user form:**
-   - **Username**: `raslen` (or your choice — this is what you'll type at login)
+   - **Username**: `admin` (or your choice — this is what you'll type at login)
    - **Email**: `raslen.missaoui@auroraiq.cloud`
    - **Email verified**: toggle **On** (skip the verify-mail step)
    - **First name / Last name**: optional, fill if you want it shown in the portal
@@ -577,17 +579,17 @@ kubectl exec -n dev $KC -- /opt/keycloak/bin/kcadm.sh config credentials \
 
 # Create the user in the auroraiq realm
 kubectl exec -n dev $KC -- /opt/keycloak/bin/kcadm.sh create users -r auroraiq \
-  -s username='raslen' -s email='raslen.missaoui@auroraiq.cloud' \
+  -s username='admin' -s email='raslen.missaoui@auroraiq.cloud' \
   -s enabled=true -s emailVerified=true
 
 # Set a permanent password (no UPDATE_PASSWORD required action)
 kubectl exec -n dev $KC -- /opt/keycloak/bin/kcadm.sh set-password -r auroraiq \
-  --username 'raslen' --new-password '<your password>'
+  --username 'admin' --new-password '<your password>'
 
 # Assign the realm role `admin` (NOTE: --uusername, double-u, NOT a typo — it's the
 # kcadm short option for "find user by username")
 kubectl exec -n dev $KC -- /opt/keycloak/bin/kcadm.sh add-roles -r auroraiq \
-  --uusername 'raslen' --rolename admin
+  --uusername 'admin' --rolename admin
 ```
 
 ### 9.3 — Verify
@@ -595,10 +597,10 @@ kubectl exec -n dev $KC -- /opt/keycloak/bin/kcadm.sh add-roles -r auroraiq \
 ```bash
 # Should list "admin" in the realm roles assigned to this user
 kubectl exec -n dev $KC -- /opt/keycloak/bin/kcadm.sh get-roles \
-  -r auroraiq --uusername 'raslen' --effective
+  -r auroraiq --uusername 'admin' --effective
 ```
 
-Then on the portal: full **logout → login** as `raslen / <password>` → the **Admin** section appears in the menu. If it does not appear, the token isn't carrying the role:
+Then on the portal: full **logout → login** as `admin / <password>` → the **Admin** section appears in the menu. If it does not appear, the token isn't carrying the role:
 - Make sure you logged out completely (the OIDC session cookie cached the old token).
 - In Keycloak, confirm Role mapping shows `admin` (the *realm* role, not a client role).
 

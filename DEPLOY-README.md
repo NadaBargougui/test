@@ -1,6 +1,6 @@
 # Aurora Console — dev-newhs Deployment Guide
 
-This guide documents every step required to bring up the dev-newhs environment on a new cluster, from infrastructure prerequisites (Traefik, Tailscale) through GitOps bootstrap (ArgoCD), and must be completed before moving on to `aurora-console/dev-newhs/DEPLOY.md`, which assumes all of these components are already running.
+This guide documents every step required to bring up the dev-newhs environment on a new cluster, from infrastructure prerequisites (Traefik, Tailscale) through GitOps bootstrap (ArgoCD).
 
 Each phase includes the reasoning behind it, the exact commands to run, and the expected output so you can verify success before proceeding to the next step.
 
@@ -8,15 +8,92 @@ Each phase includes the reasoning behind it, the exact commands to run, and the 
 
 ## Table of Contents
 
+0. [Isolation Strategy — Why test-managed-services](#0-isolation-strategy--why-test-managed-services)
 1. [Architecture Overview](#1-architecture-overview)
 2. [Phase 1 — Sealed Secrets](#2-phase-1--sealed-secrets)
 3. [Phase 2 — Traefik Deployment](#3-phase-2--traefik-deployment)
 4. [Phase 3 — Tailscale Operator](#4-phase-3--tailscale-operator)
 5. [Phase 4 — Install ArgoCD](#5-phase-4--install-argocd)
-6. [Isolation Strategy — Why test-managed-services](#6-isolation-strategy--why-test-managed-services)
-7. [Phase 5 — Fix portal-api ConfigMap](#7-phase-5--fix-portal-api-configmap)
-8. [Phase 6 — PostgreSQL](#8-phase-6--postgresql)
-9. [Phase 7 — ArgoCD Bootstrap](#9-phase-7--argocd-bootstrap)
+6. [Phase 5 — Fix portal-api ConfigMap](#6-phase-5--fix-portal-api-configmap)
+7. [Phase 6 — PostgreSQL](#7-phase-6--postgresql)
+8. [Phase 7 — ArgoCD Bootstrap](#8-phase-7--argocd-bootstrap)
+9. [Phase 8 — Create the first portal admin user](#9-phase-8--create-the-first-portal-admin-user)
+10. [Phase 9 — Configure Keycloak SMTP (Brevo) from scratch](#10-phase-9--configure-keycloak-smtp-brevo-from-scratch)
+
+---
+
+## 0. Isolation Strategy — Why test-managed-services
+
+> **Read this before touching any files.** This explains the folder and branch structure you will be working in for all remaining phases, and why we create a separate deployment folder instead of modifying existing `dev-newhs` resources.
+
+### The problem
+
+We're going to need to change some files in the repo in upcoming steps. However, these files are already used by other workloads. Modifying them directly could affect existing ArgoCD deployments.
+
+A possible approach would be to create a `deploy/dev-newhs` branch, modify the existing files, and point ArgoCD to that branch. However, this would create a **merge conflict** when merging back to `main` later.
+
+### The solution — a completely isolated environment
+
+Instead of modifying existing resources, we create a new environment with dedicated files:
+
+```
+aurora-console/test-managed-services/                         ← isolated copy of manifests
+argocd/bootstrap/test-managed-services.yaml                   ← your ArgoCD root app
+argocd/projects/aurora-console-test-managed-services.yaml     ← your AppProject
+argocd/apps/test-managed-services/aurora-console.yaml         ← your Application
+```
+
+### Branch and folder ownership
+
+| File/Folder | Branch | Owner |
+|---|---|---|
+| `aurora-console/test-managed-services/` | `deploy/dev-newhs` | You — isolated workspace |
+| `argocd/bootstrap/test-managed-services.yaml` | `deploy/dev-newhs` | You — ArgoCD bootstrap |
+| `argocd/projects/aurora-console-test-managed-services.yaml` | `deploy/dev-newhs` | You — AppProject |
+| `argocd/apps/test-managed-services/aurora-console.yaml` | `deploy/dev-newhs` | You — Application |
+| `aurora-console/dev-newhs/` | `main` | Org — untouched |
+| `argocd/bootstrap/dev-newhs.yaml` | `main` | Org — untouched |
+
+### How it was set up
+
+```bash
+# 0. Clone the repo
+git clone https://github.com/AuroraIQ-labs/auroraiq-console-gitops.git
+cd auroraiq-console-gitops
+
+# 1. Create the feature branch
+git checkout -b deploy/dev-newhs
+
+# 2. Copy dev-newhs into the new isolated folder
+cp -r aurora-console/dev-newhs aurora-console/test-managed-services
+
+# 3. Create the ArgoCD bootstrap, project, and app files from the dev-newhs originals
+cp argocd/bootstrap/dev-newhs.yaml argocd/bootstrap/test-managed-services.yaml
+cp argocd/projects/aurora-console-dev-newhs.yaml argocd/projects/aurora-console-test-managed-services.yaml
+mkdir -p argocd/apps/test-managed-services
+cp argocd/apps/dev-newhs/aurora-console.yaml argocd/apps/test-managed-services/aurora-console.yaml
+
+# 4. Replace all dev-newhs references with test-managed-services in the new files
+sed -i 's/dev-newhs/test-managed-services/g' argocd/bootstrap/test-managed-services.yaml
+sed -i 's/dev-newhs/test-managed-services/g' argocd/projects/aurora-console-test-managed-services.yaml
+sed -i 's/dev-newhs/test-managed-services/g' argocd/apps/test-managed-services/aurora-console.yaml
+
+# 6. Point the app and bootstrap to the deploy/dev-newhs branch (not main)
+sed -i 's/targetRevision: main/targetRevision: deploy\/dev-newhs/' \
+  argocd/apps/test-managed-services/aurora-console.yaml
+
+sed -i 's/targetRevision: main/targetRevision: deploy\/dev-newhs/' \
+  argocd/bootstrap/test-managed-services.yaml
+
+# 7. Exclude the org's dev-newhs apps from your ArgoCD so it doesn't try to apply them
+sed -i "s/exclude: '{bootstrap\/*,apps\/dev\/*,apps\/prod\/*}'/exclude: '{bootstrap\/*,apps\/dev\/*,apps\/prod\/*,apps\/dev-newhs\/*}'/" \
+  argocd/bootstrap/test-managed-services.yaml
+
+# 8. Push
+git push origin deploy/dev-newhs
+```
+
+**Note:** After merging into `main`, you can safely change `targetRevision` back to `main`.
 
 ---
 
@@ -29,7 +106,7 @@ Developer / Client machine (Tailscale installed)
         │
         │  private tailnet (100.x.x.x)
         ▼
-Traefik LoadBalancer  ←  tailnet IP: 100.100.237.56
+Traefik LoadBalancer  ←  tailnet IP: 100.x.x.x
   hostname: traefik-newhs
         │
         ├── portal-newhs.auroraiq.cloud/api/ws   →  portal-api:8080  (WebSocket, HTTP/1.1)
@@ -37,7 +114,6 @@ Traefik LoadBalancer  ←  tailnet IP: 100.100.237.56
         ├── portal-newhs.auroraiq.cloud          →  portal-ui:443    (React frontend)
         └── auth-newhs.auroraiq.cloud            →  keycloak:8443    (Login / JWT)
 ```
-> 100.100.237.56 is an example!
 
 ### Key components and their roles
 
@@ -58,9 +134,20 @@ Traefik LoadBalancer  ←  tailnet IP: 100.100.237.56
 
 ## 2. Phase 1 — Sealed Secrets
 
-> **Why:** Kubernetes Secrets (passwords, tokens, credentials) cannot be stored in plain text in git. Sealed Secrets encrypts them using the cluster's own certificate, only that specific cluster can decrypt them. This means your git repo is safe to be public or shared.
+> **Why:** Kubernetes Secrets (passwords, tokens, credentials) cannot be stored in plain text in git. Sealed Secrets encrypts them using the cluster's own certificate — only that specific cluster can decrypt them. This means your git repo is safe to be public or shared.
 
-Script coming soon..
+```bash
+# 1. Install the sealed-secrets controller, then export its public cert:
+kubeseal --controller-namespace=kube-system \
+         --controller-name=sealed-secrets-controller \
+         --fetch-cert > aurora-console/test-managed-services/sealed-secrets/dev-newhs-pub-cert.pem
+
+git push -u origin deploy/dev-newhs
+```
+
+> When deploying the sealed-secrets controller in the cluster, it generates one **public cert** used to encrypt secrets and one **private key** used to decrypt them before storing them in etcd. We need to fetch the public cert and put it in our repo.
+
+*Script for creating all the secrets is coming soon.*
 
 ---
 
@@ -79,7 +166,7 @@ helm repo update
 # Install Traefik
 helm -n traefik upgrade --install traefik traefik/traefik \
   --version 40.2.0 \
-  -f aurora-console/dev-newhs/traefik/values.yaml \
+  -f aurora-console/test-managed-services/traefik/values.yaml \
   --create-namespace
 ```
 
@@ -188,6 +275,7 @@ kubectl get svc -n traefik traefik
 NAME      TYPE           CLUSTER-IP       EXTERNAL-IP                                        PORT(S)                      AGE
 traefik   LoadBalancer   10.152.183.195   100.100.237.56,traefik-newhs.tailefca39.ts.net    80:31384/TCP,443:30443/TCP   2d7h
 ```
+> 100.100.237.56 is an exapmle!
 
 **Verify on the tailnet:**
 ```bash
@@ -198,6 +286,14 @@ You should see both `tailscale-operator` and `traefik-newhs` as connected device
 ```
 100.124.74.117   tailscale-operator   tagged-devices   linux   -
 100.100.237.56   traefik-newhs        tagged-devices   linux   -
+```
+
+### Step 4 — Update IP in test-managed-services/portal-api/deployment.yaml
+
+```bash
+sed -i 's|100.99.0.11|100.100.237.56|' aurora-console/test-managed-services/portal-api/deployment.yaml
+
+git push origin deploy/dev-newhs
 ```
 
 ---
@@ -235,109 +331,9 @@ argocd-server-79fd69df95-ksr4s                      1/1     Running   0         
 
 ---
 
-## 6. Isolation Strategy — Why test-managed-services
+## 6. Phase 5 — Fix portal-api ConfigMap
 
-> **Read this before touching any files.** This explains the folder and branch structure you will be working in for all remaining phases. It explains why we create a separate deployment folder instead of modifying existing `dev-newhs` resources.
-
-
-### The problem
-`portal-api/deployment.yaml` currently contains the old IP: 100.99.0.11
-This needs to be updated to the new IP, and `portal-api/configmap.yaml` also requires changes (see Phase 5).
-
-However, these files are part of the existing `aurora-console/dev-newhs` environment and are already used by other workloads. Modifying them directly could affect existing ArgoCD deployments.
-
-A possible approach would be to create a `deploy/dev-newhs` branch, modify the existing `aurora-console/dev-newhs` files, and point ArgoCD to that branch.
-
-However, this would create a **merge conflict** when merging back to `main` later.
-
-### The solution — a completely isolated environment
-
-Instead of modifying existing resources, we create a new environment with dedicated files:
-
-```
-aurora-console/test-managed-services/                         ← isolated copy of manifests
-argocd/bootstrap/test-managed-services.yaml                   ← your ArgoCD root app
-argocd/projects/aurora-console-test-managed-services.yaml     ← your AppProject
-argocd/apps/test-managed-services/aurora-console.yaml         ← your Application
-```
-
-### Branch and folder ownership
-
-| File/Folder | Branch | Owner |
-|---|---|---|
-| `aurora-console/test-managed-services/` | `deploy/dev-newhs` | You — isolated workspace |
-| `argocd/bootstrap/test-managed-services.yaml` | `deploy/dev-newhs` | You — ArgoCD bootstrap |
-| `argocd/projects/aurora-console-test-managed-services.yaml` | `deploy/dev-newhs` | You — AppProject |
-| `argocd/apps/test-managed-services/aurora-console.yaml` | `deploy/dev-newhs` | You — Application |
-| `aurora-console/dev-newhs/` | `main` | Org — untouched |
-| `argocd/bootstrap/dev-newhs.yaml` | `main` | Org — untouched |
-
-### How it was set up
-
-```bash
-# 1. Create the feature branch
-git checkout -b deploy/dev-newhs
-
-# 2. Copy dev-newhs into the new isolated folder
-cp -r aurora-console/dev-newhs aurora-console/test-managed-services
-
-# 3. Create the ArgoCD bootstrap, project, and app files from the dev-newhs originals
-cp argocd/bootstrap/dev-newhs.yaml argocd/bootstrap/test-managed-services.yaml
-cp argocd/projects/aurora-console-dev-newhs.yaml argocd/projects/aurora-console-test-managed-services.yaml
-mkdir -p argocd/apps/test-managed-services
-cp argocd/apps/dev-newhs/aurora-console.yaml argocd/apps/test-managed-services/aurora-console.yaml
-
-# 4. Replace all dev-newhs references with test-managed-services in the new files
-sed -i 's/dev-newhs/test-managed-services/g' argocd/bootstrap/test-managed-services.yaml
-sed -i 's/dev-newhs/test-managed-services/g' argocd/projects/aurora-console-test-managed-services.yaml
-sed -i 's/dev-newhs/test-managed-services/g' argocd/apps/test-managed-services/aurora-console.yaml
-
-# 5. Update IP in test-managed-services/portal-api/deployment.yaml
-sed -i 's|100.99.0.11|100.100.237.56|' aurora-console/test-managed-services/portal-api/deployment.yaml
-
-# 6. Point the app and bootstrap to the deploy/dev-newhs branch (not main)
-sed -i 's/targetRevision: main/targetRevision: deploy\/dev-newhs/' \
-  argocd/apps/test-managed-services/aurora-console.yaml
-
-sed -i 's/targetRevision: main/targetRevision: deploy\/dev-newhs/' \
-  argocd/bootstrap/test-managed-services.yaml
-
-# 7. Exclude the org's dev-newhs apps from your ArgoCD so it doesn't try to apply them
-sed -i "s/exclude: '{bootstrap\/*,apps\/dev\/*,apps\/prod\/*}'/exclude: '{bootstrap\/*,apps\/dev\/*,apps\/prod\/*,apps\/dev-newhs\/*}'/" \
-  argocd/bootstrap/test-managed-services.yaml
-
-# 8. Push
-git push origin deploy/dev-newhs
-```
-
-### How the ArgoCD App of Apps works
-
-```
-You (once, manually):
-  kubectl apply -f argocd/bootstrap/test-managed-services.yaml
-        │
-        │  root app scans argocd/ folder
-        │  (excludes bootstrap/, apps/dev/, apps/prod/, apps/dev-newhs/)
-        ▼
-ArgoCD creates:
-  AppProject  → aurora-console-test-managed-services  (from argocd/projects/)
-  Application → aurora-console-test-managed-services  (from argocd/apps/test-managed-services/)
-        │
-        │  child app scans aurora-console/test-managed-services/
-        ▼
-ArgoCD deploys:
-  portal-api, portal-ui, keycloak, ingress...
-```
-
-After this, **every `git push` to `deploy/dev-newhs` is a deployment**. No more `kubectl apply` needed.
-
-**Note:** After merging into `main`, you can safely change `targetRevision` back to `main`.
-
----
-
-## 7. Phase 5 — Fix portal-api ConfigMap
-
-> **Why:** The `portal-api` talks to MicroCloud (LXD) to provision VMs. Its ConfigMap must contain values that match what actually exists on the real MicroCloud — otherwise VM provisioning will silently fail. All changes from here on happen inside `aurora-console/test-managed-services/` (see [Isolation Strategy](#6-isolation-strategy--why-test-managed-services) above).
+> **Why:** The `portal-api` talks to MicroCloud (LXD) to provision VMs. Its ConfigMap must contain values that match what actually exists on the real MicroCloud — otherwise VM provisioning will silently fail. 
 
 **Check current values:**
 ```bash
@@ -378,18 +374,14 @@ git push origin deploy/dev-newhs
 
 ---
 
-## 8. Phase 6 — PostgreSQL
+## 7. Phase 6 — PostgreSQL
 
 > **Why:** `portal-api` connects to PostgreSQL at startup. If the database is not running when ArgoCD deploys the app, portal-api will crash in a boot loop. PostgreSQL must be up **before** the ArgoCD bootstrap.
 >
 > PostgreSQL is installed via Helm manually (not managed by ArgoCD) because it holds persistent state that should never be pruned or replaced by GitOps automation.
 
-**Apply the database credentials SealedSecret first:**
+**Verify secret is there first:**
 ```bash
-kubectl apply -f aurora-console/test-managed-services/sealed-secrets/portal/portal-db-credentials.yaml
-
-# Wait 10 seconds for decryption, then verify
-sleep 10
 kubectl get secret portal-db-credentials -n dev
 ```
 
@@ -421,10 +413,10 @@ portal-db-postgresql-0   1/1   Running   0   66s
 ```
 
 ---
- 
-## 9. Phase 7 — ArgoCD Bootstrap (To be continued..)
 
-> **Why:** This is the step that puts the cluster under full GitOps control. You apply one file manually — the root Application — and ArgoCD takes it from there: it finds the AppProject and child Application in git, creates them, then syncs all the portal manifests (portal-api, portal-ui, keycloak, ingress..) automatically.
+## 8. Phase 7 — ArgoCD Bootstrap
+
+> **Why:** This is the step that puts the cluster under full GitOps control. You apply one file manually — the root Application — and ArgoCD takes it from there: it finds the AppProject and child Application in git, creates them, then syncs all the portal manifests (portal-api, portal-ui, keycloak, ingress...) automatically.
 
 ### Pre-Bootstrap Checklist
 
@@ -449,12 +441,36 @@ kubectl get pods -n dev | grep postgresql
 
 All five must show `Running`. Do not proceed if any are missing or in error state.
 
+### How the ArgoCD works
+
+```
+You (once, manually):
+  kubectl apply -f argocd/bootstrap/test-managed-services.yaml
+        │
+        │  root app scans argocd/ folder
+        │  (excludes bootstrap/, apps/dev/, apps/prod/, apps/test-managed-services/)
+        ▼
+ArgoCD creates:
+  AppProject  → aurora-console-test-managed-services  (from argocd/projects/)
+  Application → aurora-console-test-managed-services  (from argocd/apps/test-managed-services/)
+        │
+        │  child app scans aurora-console/test-managed-services/
+        ▼
+ArgoCD deploys:
+  portal-api, portal-ui, keycloak, ingress...
+```
+
+After this, **every `git push` to `deploy/dev-newhs` is a deployment**. No more `kubectl apply` needed.
+
 ### Bootstrap
 
 ```bash
 # Apply the root Application — the only manual kubectl apply for this environment
+kubectl apply -f aurora-console/test-managed-services/sealed-secrets/argocd/argocd-repo-credentials.yaml
 kubectl apply -f argocd/bootstrap/test-managed-services.yaml
 ```
+
+> Note: you need access to the images in packages (GitHub Container Registry) in order to pull the Docker images!
 
 **Check ArgoCD applications:**
 ```bash
@@ -468,5 +484,218 @@ root-app-test-managed-services         Synced        Healthy
 aurora-console-test-managed-services   Synced        Healthy
 ```
 
-> The root app being `Synced + Healthy` means ArgoCD successfully read the git repo and created the AppProject and child Application. 
+> The root app being `Synced + Healthy` means ArgoCD successfully read the git repo and created the AppProject and child Application.
 
+**Check ArgoCD if ArgoCD deployed our apps:**
+```bash
+kubectl get pods -n dev
+```
+
+**Expected output:**
+```
+NAME                          READY   STATUS    
+keycloak-848496fdbb-mzm7w     1/1     Running   
+portal-api-747fd686d4-tk6np   1/1     Running   
+portal-db-postgresql-0        1/1     Running 
+portal-ui-77bb7f46c6-94sm5    1/1     Running   
+portal-api-747fd686d4-tk6np   1/1     Running  
+keycloak-848496fdbb-mzm7w     1/1     Running  
+keycloak-848496fdbb-mzm7w     1/1     Running   
+portal-api-747fd686d4-tk6np   1/1     Running   
+portal-api-747fd686d4-tk6np   1/1     Running  
+keycloak-848496fdbb-mzm7w     1/1     Running   
+keycloak-848496fdbb-mzm7w     1/1     Running   
+keycloak-848496fdbb-mzm7w     1/1     Running   
+```
+
+---
+
+## 9. Phase 8 — Create the first portal admin user
+
+The portal's admin pages (the *backoffice*) are gated on the Keycloak **`admin` realm role** (`kaas-api` `adminOnly` middleware checks `realm_access.roles`). The `auroraiq` realm ships with **no seeded users** (`registrationAllowed: true`), so you must create the first admin manually and assign it that role. Signup-approval is a **separate** flow and does NOT gate admin access.
+
+> ⚠️ Without this phase, NO ONE can access the backoffice. Even logging in as `admin` from the Keycloak master console gives you nothing on the portal — `master/admin` is the Keycloak super-user, NOT a portal user. The portal only reads tokens from the `auroraiq` realm.
+
+### 9.1 — Option A: Keycloak admin console (UI, step by step)
+
+1. **Open the Keycloak admin console** → https://auth-newhs.auroraiq.cloud/admin
+   - Login as `admin` / `<KC_BOOTSTRAP_ADMIN_PASSWORD>` (from `keycloak-secrets`).
+
+2. **Switch to the right realm** — top-left realm dropdown → select **`auroraiq`** (NOT `master` — `master` is only for Keycloak admin itself).
+
+3. **Left sidebar → `Users` → button `Add user` (top-right).**
+
+4. **Fill the Create user form:**
+   - **Username**: `raslen` (or your choice — this is what you'll type at login)
+   - **Email**: `raslen.missaoui@auroraiq.cloud`
+   - **Email verified**: toggle **On** (skip the verify-mail step)
+   - **First name / Last name**: optional, fill if you want it shown in the portal
+   - Leave **Required user actions** empty (otherwise the user is forced to UPDATE_PASSWORD / VERIFY_EMAIL on first login)
+   - Click **Create** → you land on the user detail page.
+
+5. **Tab `Credentials` → button `Set password`:**
+   - **Password**: `<your password>`
+   - **Password confirmation**: same
+   - **Temporary**: toggle **Off** (otherwise the user must change it on first login)
+   - Click **Save** → confirm in the modal.
+
+6. **Tab `Role mapping` → button `Assign role`:**
+   - The dialog opens with a **Filter** dropdown at the top-left.
+   - Click the dropdown → select **`Filter by realm roles`** (NOT client roles — the `kaas-api` middleware checks the *realm* role).
+   - In the search box, type `admin` → the realm role `admin` appears.
+   - **Check the line `admin`** → click **Assign**.
+   - The role now shows in the user's Role mapping list.
+
+7. **Log out / log back in on the portal** (https://portal-newhs.auroraiq.cloud) so the new token carries the role. The **Admin** menu appears in the left sidebar.
+
+### 9.2 — Option B: `kcadm` CLI (scriptable, idempotent for repeat envs)
+
+```bash
+KC=deploy/keycloak
+ADMIN_PW=$(kubectl get secret keycloak-secrets -n dev -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d)
+
+# Authenticate kcadm against the master realm
+kubectl exec -n dev $KC -- /opt/keycloak/bin/kcadm.sh config credentials \
+  --server http://localhost:8080 --realm master --user admin --password "$ADMIN_PW"
+
+# Create the user in the auroraiq realm
+kubectl exec -n dev $KC -- /opt/keycloak/bin/kcadm.sh create users -r auroraiq \
+  -s username='raslen' -s email='raslen.missaoui@auroraiq.cloud' \
+  -s enabled=true -s emailVerified=true
+
+# Set a permanent password (no UPDATE_PASSWORD required action)
+kubectl exec -n dev $KC -- /opt/keycloak/bin/kcadm.sh set-password -r auroraiq \
+  --username 'raslen' --new-password '<your password>'
+
+# Assign the realm role `admin` (NOTE: --uusername, double-u, NOT a typo — it's the
+# kcadm short option for "find user by username")
+kubectl exec -n dev $KC -- /opt/keycloak/bin/kcadm.sh add-roles -r auroraiq \
+  --uusername 'raslen' --rolename admin
+```
+
+### 9.3 — Verify
+
+```bash
+# Should list "admin" in the realm roles assigned to this user
+kubectl exec -n dev $KC -- /opt/keycloak/bin/kcadm.sh get-roles \
+  -r auroraiq --uusername 'raslen' --effective
+```
+
+Then on the portal: full **logout → login** as `raslen / <password>` → the **Admin** section appears in the menu. If it does not appear, the token isn't carrying the role:
+- Make sure you logged out completely (the OIDC session cookie cached the old token).
+- In Keycloak, confirm Role mapping shows `admin` (the *realm* role, not a client role).
+
+---
+
+## 10. Phase 9 — Configure Keycloak SMTP (Brevo) from scratch
+
+Keycloak needs an SMTP relay to send signup verify-email, password reset, etc. We use **Brevo** as the relay. The realm's `smtpServer` config holds the host/port/auth + a `from` address that **must be a verified sender** in Brevo, otherwise Brevo silently drops the mail (Keycloak still sees `HTTP 204` because the SMTP handshake succeeds — the drop happens server-side after).
+
+### 10.1 Create a Brevo account (skip if you already have one)
+
+1. Direct signup: **https://app.brevo.com/account/register**
+2. Confirm your email, finish onboarding (free plan = 300 mails/day, enough for dev).
+
+### 10.2 Grab the SMTP credentials
+
+Direct page: **https://app.brevo.com/settings/keys/smtp**
+
+You'll see:
+- **SMTP server**: `smtp-relay.brevo.com`
+- **Port**: `587`
+- **Login**: `<id>@smtp-brevo.com` (the *SMTP login*, NOT your Brevo account email)
+- **Master password** / SMTP key: starts with `xsmtpsib-...` — click **Generate a new SMTP key** if none is shown, copy it once (Brevo only displays it at creation).
+
+Save both in your password manager.
+
+### 10.3 Add and verify a sender
+
+Direct page: **https://app.brevo.com/senders/list**
+
+1. Click **Ajouter un expéditeur** (top-right).
+2. Fill:
+   - **From Name**: `AuroraIQ`
+   - **From Email**: `raslen.missaoui@auroraiq.cloud` (or any real mailbox you can open on the `auroraiq.cloud` domain).
+3. When the popup *"Authentifier votre domaine maintenant ?"* shows → click **Reporter à plus tard**. (Single-sender is enough for dev; full domain auth = clean path for prod.)
+4. Open the verification mail Brevo just sent to that address, click the confirm link.
+5. Back on the senders page, the row must show a green **Vérifié** badge.
+
+> **Why this matters**: Brevo only relays mails whose `from` matches a verified sender (or a verified domain). Without this, every `testSMTPConnection` returns 204 but recipients never receive anything — Brevo drops silently at the relay.
+
+### 10.4 Configure the `auroraiq` realm SMTP (REST API)
+
+The realm import strategy is `IGNORE_EXISTING`, so editing the `keycloak-realm` ConfigMap won't re-apply on the next pod restart. Use the live REST API instead — the change persists in the realm's DB row.
+
+```bash
+# Get an admin access token (master realm)
+KC_HOST=http://localhost:30880    # or the NodePort/IngressRoute for Keycloak
+KC_ADMIN_PW=$(kubectl -n dev get secret keycloak-secrets \
+  -o jsonpath='{.data.KC_BOOTSTRAP_ADMIN_PASSWORD}' | base64 -d)
+TOKEN=$(curl -s -X POST "$KC_HOST/realms/master/protocol/openid-connect/token" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=admin&password=$KC_ADMIN_PW&grant_type=password&client_id=admin-cli" \
+  | jq -r .access_token)
+
+# Brevo creds from 10.2 + verified sender from 10.3
+BREVO_USER='<id>@smtp-brevo.com'
+BREVO_PASS='xsmtpsib-<full-api-key-from-brevo>'
+BREVO_FROM='raslen.missaoui@auroraiq.cloud'
+BREVO_NAME='AuroraIQ'
+
+# PUT the smtpServer block on the auroraiq realm
+curl -s -o /dev/null -w "%{http_code}\n" -X PUT "$KC_HOST/admin/realms/auroraiq" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d "{\"smtpServer\":{
+        \"host\":\"smtp-relay.brevo.com\",
+        \"port\":\"587\",
+        \"from\":\"$BREVO_FROM\",
+        \"fromDisplayName\":\"$BREVO_NAME\",
+        \"replyTo\":\"\",
+        \"starttls\":\"true\",
+        \"auth\":\"true\",
+        \"ssl\":\"false\",
+        \"user\":\"$BREVO_USER\",
+        \"password\":\"$BREVO_PASS\"
+      }}"
+# Expect: 204
+```
+
+Verify (password will be masked as `**********`):
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" "$KC_HOST/admin/realms/auroraiq" \
+  | jq '.smtpServer'
+```
+
+### 10.5 Test SMTP end-to-end
+
+Keycloak's `testSMTPConnection` sends a real mail to the **currently authenticated admin user's** email. So set an email on the master admin first if it's blank:
+
+```bash
+ADMIN_ID=$(curl -s -H "Authorization: Bearer $TOKEN" \
+  "$KC_HOST/admin/realms/master/users?username=admin&exact=true" | jq -r '.[0].id')
+
+curl -s -o /dev/null -w "%{http_code}\n" -X PUT \
+  "$KC_HOST/admin/realms/master/users/$ADMIN_ID" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"email":"<your-test-inbox@gmail.com>","emailVerified":true}'
+
+# Trigger the test
+curl -s -o /dev/null -w "%{http_code}\n" -X POST \
+  "$KC_HOST/admin/realms/auroraiq/testSMTPConnection" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  --data-urlencode "config={\"host\":\"smtp-relay.brevo.com\",\"port\":\"587\",
+    \"from\":\"$BREVO_FROM\",\"fromDisplayName\":\"$BREVO_NAME\",\"replyTo\":\"\",
+    \"starttls\":\"true\",\"auth\":\"true\",\"ssl\":\"false\",
+    \"user\":\"$BREVO_USER\",\"password\":\"$BREVO_PASS\"}"
+# Expect: 204  → check the test inbox for "[KEYCLOAK] - SMTP test message"
+```
+
+If you get `204` but no mail lands within 2 min:
+- **Sender not Vérifié in Brevo** → 10.3 (verify and click confirmation link).
+- **Brand-new Brevo account** → https://app.brevo.com/statistics/email → look for the message in Transactional logs to see if Brevo blocked / queued / dropped it.
+- **Gmail blackhole** → set up SPF/DKIM/DMARC on `auroraiq.cloud` (domain auth path).
+
+### 10.6 Validate the signup flow
+
+Fresh private window → portal signup → check inbox for the **Verify Email** from `AuroraIQ <raslen.missaoui@auroraiq.cloud>`. Click the link → user lands as verified.
